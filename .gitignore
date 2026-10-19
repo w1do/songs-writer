@@ -1,0 +1,15 @@
+.memory/*
+!.memory/annotations.json
+
+.env
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Local tool and IDE folders
+.idea/
+.claude/
+.junie/

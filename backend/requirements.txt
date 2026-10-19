@@ -1,0 +1,7 @@
+fastapi==0.148.0
+uvicorn==0.54.0
+SQLAlchemy==2.1.5
+psycopg2-binary==2.9.13
+pydantic-settings==2.16.0
+pytest==9.1.1
+httpx==0.28.1

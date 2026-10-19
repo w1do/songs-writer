@@ -11,6 +11,15 @@ const SECTION_PATTERN = /(\[[A-Za-z][A-Za-z0-9 -]*\])/
 
 const SECTION_BUTTONS = ['INTRO', 'VERSE', 'PRE-CHORUS', 'CHORUS', 'BRIDGE', 'OUTRO']
 
+const SECTION_HINTS: Record<string, string> = {
+  INTRO: 'Вступление: короткое начало песни перед первым куплетом',
+  VERSE: 'Куплет: основной рассказ песни, обычно повторяется с новым текстом',
+  'PRE-CHORUS': 'Предприпев: переход от куплета к припеву, нарастает напряжение',
+  CHORUS: 'Припев: главная запоминающаяся часть, повторяется и несёт основную мысль',
+  BRIDGE: 'Бридж: контрастный раздел, даёт новый взгляд перед финалом',
+  OUTRO: 'Концовка: финал песни, завершает историю или мысль',
+}
+
 const SONG_TEMPLATE = [
   '[INTRO]',
   '',
@@ -90,7 +99,13 @@ export function LyricsEditor({ value, onChange, onRangeChange }: LyricsEditorPro
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Добавить раздел:</span>
         {SECTION_BUTTONS.map((name) => (
-          <Button key={name} variant="outline" size="xs" onClick={() => appendSection(name)}>
+          <Button
+            key={name}
+            variant="outline"
+            size="xs"
+            title={SECTION_HINTS[name]}
+            onClick={() => appendSection(name)}
+          >
             [{name}]
           </Button>
         ))}

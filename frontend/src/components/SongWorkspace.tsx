@@ -4,6 +4,7 @@ import { ExportDialog } from '@/components/ExportDialog'
 import { FinishSongPanel } from '@/components/FinishSongPanel'
 import { HookChorusPanel } from '@/components/HookChorusPanel'
 import { LineActionPanel } from '@/components/LineActionPanel'
+import { LyricsDraftPanel } from '@/components/LyricsDraftPanel'
 import { LyricsEditor, type TextRange } from '@/components/LyricsEditor'
 import { PrepareTrackPanel } from '@/components/PrepareTrackPanel'
 import { type CopyItem, SongCopyButtons } from '@/components/SongCopyButtons'
@@ -133,6 +134,7 @@ export function SongWorkspace({ song, presets }: SongWorkspaceProps) {
               <SongCopyButtons items={copyItems} />
             </CardContent>
           </Card>
+          <LyricsDraftPanel songId={song.id} hasAnalysis={hasAnalysis} onInsert={appendBlock} />
           <LineActionPanel songId={song.id} lyrics={lyrics} range={range} onReplace={replaceRange} />
         </div>
         <div className={step === 2 ? 'flex flex-col gap-6' : 'hidden'}>

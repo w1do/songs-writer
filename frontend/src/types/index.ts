@@ -119,6 +119,10 @@ export interface ChorusResult {
   variants: string[][]
 }
 
+export interface LyricsDraftResult {
+  variants: string[]
+}
+
 export interface StructureResult {
   sections: string[]
   reason: string | null

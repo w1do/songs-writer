@@ -18,6 +18,7 @@ from app.schemas import (
     HookResult,
     LineActionRequest,
     LineActionResult,
+    LyricsDraftResult,
     PrepareTrackResult,
     SongRead,
     StructureResult,
@@ -73,6 +74,20 @@ CHORUS_SYSTEM_PROMPT = (
     "Ответь только JSON-объектом с полем "
     "variants (массив от 1 до 5 вариантов, каждый вариант — массив строк припева), "
     "учитывающих уже написанные куплеты, тему, жанр и эмоцию."
+)
+
+LYRICS_DRAFT_SYSTEM_PROMPT = (
+    "Ты помогаешь музыканту придумать черновик песни. "
+    "Основа — поля song: идея, анализ (тема, эмоция, жанр, BPM) и preset с параметрами стиля. "
+    "Ответь только JSON-объектом с полем variants "
+    "(массив от 1 до 3 вариантов). Каждый вариант — полная песня целиком: "
+    "структура из блоков в квадратных скобках на отдельной строке, например [INTRO], [VERSE], "
+    "[PRE-CHORUS], [CHORUS], [BRIDGE], [OUTRO], в логичном порядке. "
+    "Припев повторяется одинаково в каждом повторе. "
+    "Каждый блок заполнен строками текста, пустых блоков и заголовков без текста не должно быть, "
+    "между блоками одна пустая строка. Не используй другие квадратные скобки внутри текста. "
+    "Учитывай тему, жанр, эмоцию и уже написанный текст песни, если он есть. "
+    "Пиши разговорным языком, избегай клише и случайных рифм."
 )
 
 STRUCTURE_SYSTEM_PROMPT = (
@@ -152,9 +167,17 @@ def _run_ai_action(
     )
     try:
         content = request_completion(system_prompt, user_prompt)
-        result = parse_structured(content, schema)
     except AIServiceError as exc:
         log_message(db, song, "error", str(exc), {"action": action})
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+    try:
+        result = parse_structured(content, schema)
+    except AIServiceError as exc:
+        log_message(
+            db, song, "error", str(exc), {"action": action, "raw_response": content}
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc
@@ -202,6 +225,19 @@ def create_hook(song_id: uuid.UUID, db: Session = Depends(get_db)):
 def create_chorus(song_id: uuid.UUID, db: Session = Depends(get_db)):
     song = _get_song(db, song_id)
     return _run_ai_action(db, song, "create-chorus", CHORUS_SYSTEM_PROMPT, ChorusResult)
+
+
+@router.post("/{song_id}/draft-lyrics", response_model=LyricsDraftResult)
+def draft_lyrics(song_id: uuid.UUID, db: Session = Depends(get_db)):
+    song = _get_song(db, song_id)
+    if not song.analysis:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Сначала проанализируйте идею",
+        )
+    return _run_ai_action(
+        db, song, "draft-lyrics", LYRICS_DRAFT_SYSTEM_PROMPT, LyricsDraftResult
+    )
 
 
 @router.post("/{song_id}/structure-suggestion", response_model=StructureResult)

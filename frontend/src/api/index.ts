@@ -5,6 +5,7 @@ import type {
   HookResult,
   LineActionRequest,
   LineActionResult,
+  LyricsDraftResult,
   Preset,
   PresetInput,
   Song,
@@ -48,6 +49,7 @@ export const aiApi = {
     request<LineActionResult>('POST', `/songs/${songId}/continue-section`, { section }),
   createHook: (songId: string) => request<HookResult>('POST', `/songs/${songId}/create-hook`),
   createChorus: (songId: string) => request<ChorusResult>('POST', `/songs/${songId}/create-chorus`),
+  draftLyrics: (songId: string) => request<LyricsDraftResult>('POST', `/songs/${songId}/draft-lyrics`),
   structureSuggestion: (songId: string) =>
     request<StructureResult>('POST', `/songs/${songId}/structure-suggestion`),
   finishSong: (songId: string) => request<FinishSongResult>('POST', `/songs/${songId}/finish-song`),

@@ -97,12 +97,24 @@ def request_completion(
         raise AIServiceError("AI provider returned an unexpected response") from exc
 
 
+def _extract_json_object(text: str) -> str:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        return text
+    return text[start : end + 1]
+
+
 def parse_structured(content: str, schema: type[ModelT]) -> ModelT:
     text = content.strip()
     if text.startswith("```"):
         text = text.strip("`").removeprefix("json").strip()
     try:
-        return schema.model_validate(json.loads(text))
+        return schema.model_validate(json.loads(text, strict=False))
+    except (ValueError, ValidationError):
+        pass
+    try:
+        return schema.model_validate(json.loads(_extract_json_object(text), strict=False))
     except (ValueError, ValidationError) as exc:
         raise AIServiceError("AI response does not match expected schema") from exc
 

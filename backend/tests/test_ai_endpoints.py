@@ -340,3 +340,126 @@ def test_ai_action_missing_song_returns_404(client):
     response = client.post(f"/songs/{uuid.uuid4()}/create-hook")
 
     assert response.status_code == 404
+
+
+def test_draft_lyrics_uses_analysis_and_keeps_lyrics(client, monkeypatch):
+    song = create_song(client)
+    lyrics = "[VERSE]\nkeep the original text"
+    client.patch(f"/songs/{song['id']}", json={"lyrics": lyrics})
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    result = {"variants": ["[VERSE]\nrain on the glass\n\n[CHORUS]\nhold on"]}
+    captured = {}
+
+    def capturing(system_prompt, user_prompt, transport=None):
+        captured["user_prompt"] = user_prompt
+        return json.dumps(result)
+
+    monkeypatch.setattr(ai, "request_completion", capturing)
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 200
+    assert response.json() == result
+    assert "melancholy" in captured["user_prompt"]
+    assert client.get(f"/songs/{song['id']}").json()["lyrics"] == lyrics
+
+
+def test_draft_lyrics_requires_analysis(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(
+        ai, "request_completion", fake_completion(json.dumps({"variants": ["x"]}))
+    )
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 409
+
+
+def test_draft_lyrics_rejects_invalid_ai_response(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    monkeypatch.setattr(
+        ai, "request_completion", fake_completion(json.dumps({"variants": []}))
+    )
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 502
+
+
+def test_draft_lyrics_accepts_json_wrapped_in_text(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    content = 'Вот вариант:\n{"variants": ["[VERSE]\\nrain on the glass"]}'
+    monkeypatch.setattr(ai, "request_completion", fake_completion(content))
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 200
+    assert response.json() == {"variants": ["[VERSE]\nrain on the glass"]}
+
+
+def test_draft_lyrics_keeps_at_most_three_variants(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    content = json.dumps({"variants": ["a", "b", "c", "d"]})
+    monkeypatch.setattr(ai, "request_completion", fake_completion(content))
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 200
+    assert response.json() == {"variants": ["a", "b", "c"]}
+
+
+def test_draft_lyrics_accepts_raw_newlines_inside_json_strings(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    content = '{"variants": ["[VERSE]\nrain on the glass\n\n[CHORUS]\nhold on"]}'
+    monkeypatch.setattr(ai, "request_completion", fake_completion(content))
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 200
+    assert response.json() == {"variants": ["[VERSE]\nrain on the glass\n\n[CHORUS]\nhold on"]}
+
+
+def test_draft_lyrics_ignores_extra_fields_and_line_lists(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    content = json.dumps(
+        {"variants": [["[VERSE]", "rain on the glass"]], "note": "ok"}
+    )
+    monkeypatch.setattr(ai, "request_completion", fake_completion(content))
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 200
+    assert response.json() == {"variants": ["[VERSE]\nrain on the glass"]}
+
+
+def test_draft_lyrics_error_log_keeps_raw_response(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    monkeypatch.setattr(ai, "request_completion", fake_completion("не JSON вообще"))
+
+    response = client.post(f"/songs/{song['id']}/draft-lyrics")
+
+    assert response.status_code == 502
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        errors = (
+            db.query(Message)
+            .filter(Message.song_id == uuid.UUID(song["id"]), Message.role == "error")
+            .all()
+        )
+    assert any(
+        (m.message_metadata or {}).get("raw_response") == "не JSON вообще" for m in errors
+    )

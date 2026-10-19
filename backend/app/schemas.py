@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def check_bpm_range(bpm_min: int | None, bpm_max: int | None) -> None:
@@ -181,6 +181,30 @@ class ChorusResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     variants: list[list[str]] = Field(min_length=1, max_length=5)
+
+
+class LyricsDraftResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    variants: list[str] = Field(min_length=1)
+
+    @field_validator("variants", mode="before")
+    @classmethod
+    def join_line_lists(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [
+                "\n".join(str(line) for line in item) if isinstance(item, list) else item
+                for item in value
+            ]
+        return value
+
+    @field_validator("variants")
+    @classmethod
+    def normalize_variants(cls, value: list[str]) -> list[str]:
+        variants = [item.strip() for item in value if item.strip()][:3]
+        if not variants:
+            raise ValueError("variants must contain non-empty text")
+        return variants
 
 
 class StructureResult(BaseModel):

@@ -11,7 +11,7 @@ from app.ai import router as ai_router
 from app.config import settings
 from app.database import Base, engine
 from app.models import Message
-from app.services.ai import AIServiceError
+from app.services.ai import PRESET_CONTEXT_FIELDS, AIServiceError
 from app.songs import router as songs_router
 
 VALID_ANALYSIS = {
@@ -33,6 +33,14 @@ def client(monkeypatch):
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS story TEXT"))
+        connection.execute(
+            text(
+                "ALTER TABLE songs ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'draft'"
+            )
+        )
+        connection.execute(
+            text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS analysis_status VARCHAR(20)")
+        )
         connection.execute(text("TRUNCATE songs, messages, presets CASCADE"))
 
     app = FastAPI()
@@ -464,6 +472,176 @@ def test_draft_lyrics_error_log_keeps_raw_response(client, monkeypatch):
     assert any(
         (m.message_metadata or {}).get("raw_response") == "не JSON вообще" for m in errors
     )
+
+
+REFERENCE_ANALYSIS = {
+    "theme": "night drive",
+    "emotions": ["calm", "longing"],
+    "genre_context": ["synthwave"],
+    "bpm": 100,
+    "energy": "medium",
+    "structure": ["VERSE", "CHORUS"],
+    "delivery": "singing",
+    "rhyme_and_flow": "long chained rhymes",
+    "transcript": "neon lights on the highway",
+}
+DRAFT_RESULT = {"variants": ["[VERSE]\nrain on the glass"]}
+
+
+def create_reference_preset(**fields):
+    from app.database import SessionLocal
+    from app.models import Preset
+
+    with SessionLocal() as db:
+        preset = Preset(**{"name": "reference preset", "genre": "synthwave", **fields})
+        db.add(preset)
+        db.commit()
+        return str(preset.id)
+
+
+def create_analyzed_song(client, monkeypatch):
+    song = create_song(client)
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(VALID_ANALYSIS)))
+    client.post(f"/songs/{song['id']}/analyze-idea")
+    return song
+
+
+def capture_completion(monkeypatch, content):
+    calls = []
+
+    def _call(system_prompt, user_prompt, transport=None):
+        calls.append(user_prompt)
+        return content
+
+    monkeypatch.setattr(ai, "request_completion", _call)
+    return calls
+
+
+def test_draft_lyrics_adds_preset_as_style_context(client, monkeypatch):
+    song = create_analyzed_song(client, monkeypatch)
+    preset_id = create_reference_preset(
+        genre="synthwave", bpm_min=96, bpm_max=104, style_prompt="warm synth vocal"
+    )
+    calls = capture_completion(monkeypatch, json.dumps(DRAFT_RESULT))
+
+    response = client.post(
+        f"/songs/{song['id']}/draft-lyrics", json={"preset_id": preset_id}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == DRAFT_RESULT
+    prompt = json.loads(calls[0])
+    style = prompt["style_context"]
+    assert style["guidance"]
+    assert style["genre"] == "synthwave"
+    assert style["bpm_min"] == 96
+    assert style["bpm_max"] == 104
+    assert style["style_prompt"] == "warm synth vocal"
+    assert "negative_style_prompt" not in style
+    assert prompt["song"]["emotion"] == "melancholy"
+
+
+def test_draft_lyrics_without_preset_id_has_no_style_context(client, monkeypatch):
+    song = create_analyzed_song(client, monkeypatch)
+    calls = capture_completion(monkeypatch, json.dumps(DRAFT_RESULT))
+
+    assert client.post(f"/songs/{song['id']}/draft-lyrics").status_code == 200
+    assert client.post(
+        f"/songs/{song['id']}/draft-lyrics", json={}
+    ).status_code == 200
+
+    without_body = json.loads(calls[0])
+    assert without_body == json.loads(calls[1])
+    assert set(without_body) == {"song", "request"}
+    assert without_body["request"] == {}
+
+
+def test_draft_lyrics_unknown_preset_returns_404(client, monkeypatch):
+    song = create_analyzed_song(client, monkeypatch)
+    calls = capture_completion(monkeypatch, json.dumps(DRAFT_RESULT))
+
+    response = client.post(
+        f"/songs/{song['id']}/draft-lyrics", json={"preset_id": str(uuid.uuid4())}
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Preset not found"
+    assert calls == []
+
+
+def test_draft_lyrics_uses_preset_of_reference_song(client, monkeypatch):
+    from app.database import SessionLocal
+    from app.models import Song
+
+    song = create_analyzed_song(client, monkeypatch)
+    preset_id = create_reference_preset(genre="ballad")
+    with SessionLocal() as db:
+        reference = Song(title="reference.mp3", kind="reference", preset_id=uuid.UUID(preset_id))
+        db.add(reference)
+        db.commit()
+    calls = capture_completion(monkeypatch, json.dumps(DRAFT_RESULT))
+
+    response = client.post(
+        f"/songs/{song['id']}/draft-lyrics", json={"preset_id": preset_id}
+    )
+
+    assert response.status_code == 200
+    assert json.loads(calls[0])["style_context"]["genre"] == "ballad"
+
+
+def test_draft_lyrics_reference_transcript_stays_out_of_message_journal(
+    client, monkeypatch
+):
+    from app.database import SessionLocal
+    from app.models import Song
+
+    song = create_analyzed_song(client, monkeypatch)
+    preset_id = create_reference_preset(genre="synthwave", style_prompt="warm synth vocal")
+    with SessionLocal() as db:
+        reference = Song(
+            title="reference.mp3",
+            kind="reference",
+            analysis_status="done",
+            analysis=REFERENCE_ANALYSIS,
+            preset_id=uuid.UUID(preset_id),
+        )
+        db.add(reference)
+        db.commit()
+    capture_completion(monkeypatch, json.dumps(DRAFT_RESULT))
+
+    response = client.post(
+        f"/songs/{song['id']}/draft-lyrics", json={"preset_id": preset_id}
+    )
+
+    assert response.status_code == 200
+    transcript = REFERENCE_ANALYSIS["transcript"]
+    with SessionLocal() as db:
+        messages = (
+            db.query(Message).filter(Message.song_id == uuid.UUID(song["id"])).all()
+        )
+    assert messages
+    for message in messages:
+        assert transcript not in message.content
+        assert transcript not in json.dumps(message.message_metadata or {})
+    style_logs = [
+        m.message_metadata["style_context"]
+        for m in messages
+        if "style_context" in (m.message_metadata or {})
+    ]
+    assert len(style_logs) == 1
+    assert set(style_logs[0]) <= {"guidance", *PRESET_CONTEXT_FIELDS}
+
+
+def test_draft_lyrics_rejects_malformed_preset_id(client, monkeypatch):
+    song = create_analyzed_song(client, monkeypatch)
+    calls = capture_completion(monkeypatch, json.dumps(DRAFT_RESULT))
+
+    response = client.post(
+        f"/songs/{song['id']}/draft-lyrics", json={"preset_id": "not-a-uuid"}
+    )
+
+    assert response.status_code == 422
+    assert calls == []
 
 
 def test_chat_saves_messages_and_updates_lyrics(client, monkeypatch):

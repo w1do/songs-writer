@@ -1,3 +1,4 @@
+import base64
 import json
 
 import httpx
@@ -5,9 +6,12 @@ import pytest
 
 from app.config import settings
 from app.models import Preset, Song
-from app.schemas import PresetCreate
+from app.schemas import PresetCreate, ReferenceAnalysis
 from app.services.ai import (
     AIServiceError,
+    ReferenceAnalysisInvalidJSONError,
+    ReferenceAnalysisValidationError,
+    analyze_reference_audio,
     build_song_context,
     parse_structured,
     request_completion,
@@ -193,3 +197,128 @@ def test_build_song_context_with_preset_and_partial_song_data():
     context = build_song_context(song, preset)
 
     assert context == {"idea": "idea", "preset": {"genre": "rock"}}
+
+
+ANALYSIS_FIELDS = {
+    "theme": "lost love",
+    "emotions": ["melancholy"],
+    "genre_context": ["ballad"],
+    "bpm": 72,
+    "energy": "low",
+    "structure": ["[VERSE]", "[CHORUS]"],
+    "delivery": "sung",
+    "rhyme_and_flow": "AABB couplets",
+    "transcript": "[VERSE]\nrain on the glass",
+}
+
+
+@pytest.fixture
+def audio_settings(ai_settings, monkeypatch):
+    monkeypatch.setattr(settings, "ai_audio_model", "audio-test-model")
+
+
+def test_analyze_reference_audio_sends_audio_part_and_returns_validated_result(
+    audio_settings,
+):
+    captured = {}
+    audio = b"RIFF-fake-wav-bytes"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return completion_response(json.dumps(ANALYSIS_FIELDS))
+
+    result = analyze_reference_audio(
+        audio, "wav", transport=httpx.MockTransport(handler)
+    )
+
+    body = captured["body"]
+    assert body["model"] == "audio-test-model"
+    assert body["messages"][1]["content"][1] == {
+        "type": "input_audio",
+        "input_audio": {
+            "data": base64.b64encode(audio).decode("ascii"),
+            "format": "wav",
+        },
+    }
+    assert result == ReferenceAnalysis(**ANALYSIS_FIELDS)
+
+
+def test_analyze_reference_audio_accepts_json_wrapped_in_markdown_fence(audio_settings):
+    content = "```json\n" + json.dumps(ANALYSIS_FIELDS) + "\n```"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return completion_response(content)
+
+    result = analyze_reference_audio(
+        b"audio", "mp3", transport=httpx.MockTransport(handler)
+    )
+
+    assert result.theme == "lost love"
+
+
+def test_analyze_reference_audio_invalid_json_raises_invalid_json_error(audio_settings):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return completion_response("theme: lost love, no braces at all")
+
+    with pytest.raises(ReferenceAnalysisInvalidJSONError, match="not valid JSON"):
+        analyze_reference_audio(b"audio", "wav", transport=httpx.MockTransport(handler))
+
+
+def test_analyze_reference_audio_schema_mismatch_raises_validation_error(
+    audio_settings,
+):
+    invalid = {**ANALYSIS_FIELDS, "bpm": "fast"}
+    invalid.pop("theme")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return completion_response(json.dumps(invalid))
+
+    with pytest.raises(
+        ReferenceAnalysisValidationError, match="does not match expected schema"
+    ):
+        analyze_reference_audio(b"audio", "wav", transport=httpx.MockTransport(handler))
+
+
+def test_analyze_reference_audio_normalizes_common_model_deviations(audio_settings):
+    drifted = {
+        **ANALYSIS_FIELDS,
+        "energy": 7,
+        "bpm": 72.4,
+        "emotions": "melancholy",
+        "transcript": None,
+        "mood": "sad",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return completion_response(json.dumps(drifted))
+
+    result = analyze_reference_audio(
+        b"audio", "mp3", transport=httpx.MockTransport(handler)
+    )
+
+    assert result.energy == "7"
+    assert result.bpm == 72
+    assert result.emotions == ["melancholy"]
+    assert result.transcript == ""
+
+
+def test_analyze_reference_audio_provider_error_raises_ai_service_error(audio_settings):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "upstream down"})
+
+    with pytest.raises(AIServiceError, match="HTTP 500") as exc_info:
+        analyze_reference_audio(b"audio", "wav", transport=httpx.MockTransport(handler))
+
+    assert "test-key" not in str(exc_info.value)
+    assert not isinstance(exc_info.value, ReferenceAnalysisInvalidJSONError)
+    assert not isinstance(exc_info.value, ReferenceAnalysisValidationError)
+
+
+def test_analyze_reference_audio_rejects_unsupported_format_without_request(
+    audio_settings,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("request must not be sent")
+
+    with pytest.raises(AIServiceError, match="not supported"):
+        analyze_reference_audio(b"audio", "ogg", transport=httpx.MockTransport(handler))

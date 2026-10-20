@@ -10,6 +10,68 @@ def check_bpm_range(bpm_min: int | None, bpm_max: int | None) -> None:
         raise ValueError("bpm_min must be less than or equal to bpm_max")
 
 
+STYLE_TEXT_LIMIT = 1000
+NEGATIVE_STYLE_LIMIT = 1000
+
+_STYLE_PARTS = (
+    ("genre", "Genre"),
+    ("bpm", "BPM"),
+    ("energy", "Energy"),
+    ("style_prompt", "Style"),
+    ("sound_scene", "Sound scene"),
+    ("hooks_prompt", "Hooks"),
+    ("effects_prompt", "Effects"),
+    ("chorus_vocal_style", "Chorus vocal style"),
+    ("description", "Description"),
+)
+_TRIM_ORDER = (
+    "description",
+    "chorus_vocal_style",
+    "effects_prompt",
+    "hooks_prompt",
+    "sound_scene",
+    "style_prompt",
+)
+
+
+def _style_length(data: dict[str, Any]) -> int:
+    bpm_min, bpm_max = data.get("bpm_min"), data.get("bpm_max")
+    bpm = ""
+    if bpm_min is not None and bpm_max is not None:
+        bpm = f"{bpm_min}-{bpm_max}"
+    elif bpm_min is not None or bpm_max is not None:
+        bpm = str(bpm_min if bpm_min is not None else bpm_max)
+    lines = []
+    for key, label in _STYLE_PARTS:
+        value = bpm if key == "bpm" else data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            lines.append(f"{label}: {text}")
+    return len("\n".join(lines))
+
+
+def fit_preset_limits(data: Any) -> Any:
+    """Trim preset text fields so copied style and negative are <= 1000 chars each."""
+    if not isinstance(data, dict):
+        return data
+    data = dict(data)
+    negative = data.get("negative_style_prompt")
+    if isinstance(negative, str) and len(negative.strip()) > NEGATIVE_STYLE_LIMIT:
+        data["negative_style_prompt"] = negative.strip()[:NEGATIVE_STYLE_LIMIT].rstrip()
+    for key in _TRIM_ORDER:
+        excess = _style_length(data) - STYLE_TEXT_LIMIT
+        if excess <= 0:
+            break
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        value = value.strip()
+        data[key] = value[: max(0, len(value) - excess)].rstrip() or None
+    return data
+
+
 class SongCreate(BaseModel):
     idea: str = Field(min_length=1)
     title: str | None = Field(default=None, max_length=300)
@@ -39,6 +101,8 @@ class SongRead(BaseModel):
     analysis: dict[str, Any] | None
     generation_settings: dict[str, Any] | None
     preset_id: uuid.UUID | None
+    kind: str
+    analysis_status: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -90,6 +154,15 @@ class SongListItem(BaseModel):
     updated_at: datetime
 
 
+class SongReferenceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    title: str | None
+    kind: str
+    analysis_status: str | None
+
+
 class SongExport(BaseModel):
     song_id: uuid.UUID
     title: str | None
@@ -114,6 +187,11 @@ class PresetCreate(BaseModel):
     chorus_vocal_style: str | None = None
     description: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def fit_limits(cls, data: Any) -> Any:
+        return fit_preset_limits(data)
+
     @model_validator(mode="after")
     def validate_bpm(self) -> "PresetCreate":
         check_bpm_range(self.bpm_min, self.bpm_max)
@@ -133,6 +211,11 @@ class PresetUpdate(BaseModel):
     effects_prompt: str | None = None
     chorus_vocal_style: str | None = None
     description: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def fit_limits(cls, data: Any) -> Any:
+        return fit_preset_limits(data)
 
     @model_validator(mode="after")
     def validate_bpm(self) -> "PresetUpdate":
@@ -173,6 +256,20 @@ class AnalyzeIdeaResult(BaseModel):
     bpm: int = Field(ge=40, le=220)
     energy: float = Field(ge=0, le=1)
     structure: list[str] = Field(min_length=1)
+
+
+class ReferenceAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    theme: str
+    emotions: list[str]
+    genre_context: list[str]
+    bpm: int | None
+    energy: str
+    structure: list[str]
+    delivery: str
+    rhyme_and_flow: str
+    transcript: str
 
 
 class LineActionRequest(BaseModel):
@@ -219,6 +316,12 @@ class ChorusResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     variants: list[list[str]] = Field(min_length=1, max_length=5)
+
+
+class DraftLyricsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preset_id: uuid.UUID | None = None
 
 
 class LyricsDraftResult(BaseModel):

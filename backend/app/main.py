@@ -3,10 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from app import models  # noqa: F401  регистрирует таблицы в metadata
+from alembic import command
 from app.ai import router as ai_router
 from app.auth import router as auth_router
-from app.database import Base, engine
+from app.database import engine
+from app.migrations import alembic_config
 from app.presets import router as presets_router
 from app.songs import router as songs_router
 
@@ -15,9 +16,7 @@ from app.songs import router as songs_router
 async def lifespan(app: FastAPI):
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
-    Base.metadata.create_all(bind=engine)
-    with engine.begin() as connection:
-        connection.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS story TEXT"))
+    command.upgrade(alembic_config(), "head")
     yield
 
 

@@ -9,13 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.auth import require_session
 from app.database import get_db
-from app.models import Message, Song
+from app.models import Message, Preset, Song
 from app.schemas import (
     AnalyzeIdeaResult,
     ChatAIResult,
     ChorusResult,
     ContinueSectionRequest,
     ContinueSectionResult,
+    DraftLyricsRequest,
     FinishSongResult,
     HookResult,
     LineActionRequest,
@@ -32,6 +33,7 @@ from app.services.ai import (
     AIServiceError,
     build_chat_context,
     build_song_context,
+    build_style_context,
     log_message,
     parse_structured,
     request_completion,
@@ -176,18 +178,20 @@ def _run_ai_action(
     system_prompt: str,
     schema: type[ModelT],
     request_payload: dict | None = None,
+    style_context: dict | None = None,
 ) -> ModelT:
     context = build_song_context(song, song.preset)
-    user_prompt = json.dumps(
-        {"song": context, "request": request_payload or {}}, ensure_ascii=False
-    )
-    log_message(
-        db,
-        song,
-        "user",
-        action,
-        {"action": action, "context": context, "request": request_payload},
-    )
+    prompt_payload: dict = {"song": context, "request": request_payload or {}}
+    log_metadata: dict = {
+        "action": action,
+        "context": context,
+        "request": request_payload,
+    }
+    if style_context is not None:
+        prompt_payload["style_context"] = style_context
+        log_metadata["style_context"] = style_context
+    user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
+    log_message(db, song, "user", action, log_metadata)
     try:
         content = request_completion(system_prompt, user_prompt)
     except AIServiceError as exc:
@@ -251,15 +255,32 @@ def create_chorus(song_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/{song_id}/draft-lyrics", response_model=LyricsDraftResult)
-def draft_lyrics(song_id: uuid.UUID, db: Session = Depends(get_db)):
+def draft_lyrics(
+    song_id: uuid.UUID,
+    payload: DraftLyricsRequest | None = None,
+    db: Session = Depends(get_db),
+):
     song = _get_song(db, song_id)
     if not song.analysis:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Сначала проанализируйте идею",
         )
+    style_context = None
+    if payload is not None and payload.preset_id is not None:
+        preset = db.get(Preset, payload.preset_id)
+        if preset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Preset not found"
+            )
+        style_context = build_style_context(preset)
     return _run_ai_action(
-        db, song, "draft-lyrics", LYRICS_DRAFT_SYSTEM_PROMPT, LyricsDraftResult
+        db,
+        song,
+        "draft-lyrics",
+        LYRICS_DRAFT_SYSTEM_PROMPT,
+        LyricsDraftResult,
+        style_context=style_context,
     )
 
 

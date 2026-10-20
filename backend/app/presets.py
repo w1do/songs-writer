@@ -14,21 +14,14 @@ from app.schemas import (
     PresetUpdate,
     check_bpm_range,
 )
-from app.services.ai import AIServiceError, parse_structured, request_completion
+from app.services.ai import (
+    PRESET_GENERATE_SYSTEM_PROMPT,
+    AIServiceError,
+    parse_structured,
+    request_completion,
+)
 
 router = APIRouter(prefix="/presets", dependencies=[Depends(require_session)])
-
-PRESET_GENERATE_SYSTEM_PROMPT = (
-    "Ты создаёшь пресет жанра для генератора музыки "
-    "по короткому описанию пользователя. "
-    "Ответь только JSON-объектом с полями: "
-    "name (строка, до 200 символов), genre (строка), "
-    "bpm_min и bpm_max (целые, bpm_min <= bpm_max), "
-    "energy (число 0-1), style_prompt, negative_style_prompt, "
-    "sound_scene, hooks_prompt, "
-    "effects_prompt, chorus_vocal_style, description (строки или null). "
-    "Не пиши текст песни."
-)
 
 
 def _get_preset(db: Session, preset_id: uuid.UUID) -> Preset:

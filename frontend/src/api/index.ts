@@ -1,6 +1,7 @@
 import { request } from './client'
 import type {
   ChatMessage,
+  LyricsDraftResult,
   Preset,
   PresetInput,
   Song,
@@ -8,6 +9,7 @@ import type {
   SongCreateInput,
   SongExport,
   SongListItem,
+  SongReference,
   SongUpdateInput,
 } from '@/types'
 
@@ -36,8 +38,18 @@ export const songsApi = {
   exportData: (id: string) => request<SongExport>('GET', `/songs/${id}/export`),
 }
 
+export const referencesApi = {
+  upload: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return request<SongReference>('POST', '/songs/reference', body)
+  },
+}
+
 export const aiApi = {
   listMessages: (songId: string) => request<ChatMessage[]>('GET', `/songs/${songId}/messages`),
   chat: (songId: string, message: string) =>
     request<SongChatResponse>('POST', `/songs/${songId}/chat`, { message }),
+  draftLyrics: (songId: string, presetId: string | null) =>
+    request<LyricsDraftResult>('POST', `/songs/${songId}/draft-lyrics`, { preset_id: presetId }),
 }

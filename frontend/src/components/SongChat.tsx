@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Mic, MicOff, Send, Sparkles } from 'lucide-react'
 import { ApiError, aiApi } from '@/api'
+import { PresetPicker } from '@/components/PresetPicker'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
@@ -9,6 +10,8 @@ import type { ChatMessage } from '@/types'
 
 interface SongChatProps {
   songId: string
+  presetId: string
+  onPresetChange: (presetId: string) => void
   onLyricsChange: (lyrics: string) => void
 }
 
@@ -27,12 +30,14 @@ function errorMessage(err: unknown): string {
   return err instanceof ApiError ? err.message : 'Не удалось получить ответ ИИ. Попробуйте ещё раз.'
 }
 
-export function SongChat({ songId, onLyricsChange }: SongChatProps) {
+export function SongChat({ songId, presetId, onPresetChange, onLyricsChange }: SongChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [input, setInput] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [draftVariants, setDraftVariants] = useState<string[]>([])
+  const [draftPending, setDraftPending] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
   const speech = useSpeechInput((text) => setInput((current) => appendText(current, text)))
@@ -84,6 +89,22 @@ export function SongChat({ songId, onLyricsChange }: SongChatProps) {
     }
   }
 
+  async function draftLyrics() {
+    if (draftPending) {
+      return
+    }
+    setDraftPending(true)
+    setError(null)
+    try {
+      const response = await aiApi.draftLyrics(songId, presetId || null)
+      setDraftVariants(response.variants)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setDraftPending(false)
+    }
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -108,12 +129,25 @@ export function SongChat({ songId, onLyricsChange }: SongChatProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <PresetPicker value={presetId} onChange={onPresetChange} />
         <div className="flex flex-wrap items-center gap-2">
           <Button className="gap-2" disabled={pending || loading} onClick={() => send(CREATE_SONG_PROMPT)}>
             <Sparkles className="size-4" />
             Придумать песню по AI
           </Button>
+          <Button variant="outline" disabled={draftPending || loading} onClick={() => void draftLyrics()}>
+            {draftPending ? 'Создание черновика...' : 'Черновик текста'}
+          </Button>
         </div>
+        {draftVariants.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {draftVariants.map((variant, index) => (
+              <div key={index} className="whitespace-pre-wrap rounded-md border p-3 text-sm">
+                {variant}
+              </div>
+            ))}
+          </div>
+        )}
         <div
           ref={listRef}
           role="log"

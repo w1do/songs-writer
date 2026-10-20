@@ -51,6 +51,8 @@ export interface Song {
   analysis: Record<string, unknown> | null
   generation_settings: GenerationSettings | null
   preset_id: UUID | null
+  kind: string
+  analysis_status: ReferenceAnalysisStatus | null
   created_at: string
   updated_at: string
 }
@@ -102,4 +104,21 @@ export interface SongChatResponse {
   reply: string
   lyrics: string | null
   messages: ChatMessage[]
+}
+
+export type ReferenceAnalysisStatus = 'pending' | 'done' | 'failed'
+
+export interface SongReference {
+  id: UUID
+  title: string | null
+  kind: string
+  analysis_status: ReferenceAnalysisStatus | null
+}
+
+export interface LyricsDraftInput {
+  preset_id: UUID | null
+}
+
+export interface LyricsDraftResult {
+  variants: string[]
 }

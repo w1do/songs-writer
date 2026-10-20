@@ -41,6 +41,10 @@ class Song(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    kind: Mapped[str] = mapped_column(
+        String(20), default="draft", server_default="draft"
+    )
+    analysis_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     idea: Mapped[str | None] = mapped_column(Text, nullable=True)
     story: Mapped[str | None] = mapped_column(Text, nullable=True)
     lyrics: Mapped[str | None] = mapped_column(Text, nullable=True)

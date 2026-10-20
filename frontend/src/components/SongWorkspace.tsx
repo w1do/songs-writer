@@ -1,7 +1,9 @@
+import { songsApi } from '@/api'
 import { useState } from 'react'
 import { ExportDialog } from '@/components/ExportDialog'
 import { SongChat } from '@/components/SongChat'
 import { type CopyItem, SongCopyButtons } from '@/components/SongCopyButtons'
+import { ReferenceUpload } from '@/components/ReferenceUpload'
 import { StoryPanel } from '@/components/StoryPanel'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,20 +15,64 @@ interface SongWorkspaceProps {
   presets: Preset[]
 }
 
+const COPY_LIMIT = 1000
+
+function buildStyleText(preset: Preset | null, song: Song): string {
+  if (!preset) {
+    return song.track_settings?.style_prompt ?? ''
+  }
+  const bpm =
+    preset.bpm_min != null && preset.bpm_max != null
+      ? `${preset.bpm_min}-${preset.bpm_max}`
+      : String(preset.bpm_min ?? preset.bpm_max ?? '')
+  const parts: [string, string | null | undefined][] = [
+    ['Genre', preset.genre],
+    ['BPM', bpm],
+    ['Energy', preset.energy == null ? '' : String(preset.energy)],
+    ['Style', preset.style_prompt],
+    ['Sound scene', preset.sound_scene],
+    ['Hooks', preset.hooks_prompt],
+    ['Effects', preset.effects_prompt],
+    ['Chorus vocal style', preset.chorus_vocal_style],
+    ['Description', preset.description],
+  ]
+  return parts
+    .filter(([, value]) => value && value.trim())
+    .map(([label, value]) => `${label}: ${value}`)
+    .join('\n')
+    .slice(0, COPY_LIMIT)
+}
+
 export function SongWorkspace({ song, presets }: SongWorkspaceProps) {
   const [story, setStory] = useState(song.story)
   const [lyrics, setLyrics] = useState(song.lyrics ?? '')
   const [changedKeys, setChangedKeys] = useState<Set<string>>(() => new Set())
   const [exportOpen, setExportOpen] = useState(false)
 
-  const preset = presets.find((item) => item.id === song.preset_id) ?? null
+  const [presetId, setPresetId] = useState(song.preset_id ?? '')
+  const preset = presets.find((item) => item.id === presetId) ?? null
+
+  async function handlePresetChange(next: string) {
+    const previous = presetId
+    setPresetId(next)
+    try {
+      await songsApi.update(song.id, { preset_id: next || null })
+    } catch {
+      setPresetId(previous)
+    }
+  }
   const sections = parseLyricsSections(lyrics)
   const hasLyrics = lyrics.trim().length > 0
 
   const copyItems: CopyItem[] = [
     { label: 'Копировать текст песни', value: lyrics },
-    { label: 'Копировать style-подсказку', value: preset?.style_prompt ?? '' },
-    { label: 'Копировать negative-подсказку', value: preset?.negative_style_prompt ?? '' },
+    { label: 'Копировать style-подсказку', value: buildStyleText(preset, song).slice(0, COPY_LIMIT) },
+    {
+      label: 'Копировать negative-подсказку',
+      value: (
+        preset?.negative_style_prompt || song.track_settings?.negative_style_prompt || ''
+      ).slice(0, COPY_LIMIT),
+    },
   ]
 
   function handleLyricsChange(next: string) {
@@ -48,6 +94,18 @@ export function SongWorkspace({ song, presets }: SongWorkspaceProps) {
           <CardTitle>{song.title || 'Песня без названия'}</CardTitle>
           <CardDescription>Пресет: {preset ? `${preset.name} (${preset.genre})` : 'не выбран'}</CardDescription>
         </CardHeader>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Референс песни</CardTitle>
+          <CardDescription>
+            Загрузите песню, которая нравится: ИИ определит мотив, подачу и стиль и создаст пресет.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ReferenceUpload />
+        </CardContent>
       </Card>
 
       <StoryPanel songId={song.id} story={story} onSaved={setStory} />
@@ -95,7 +153,12 @@ export function SongWorkspace({ song, presets }: SongWorkspaceProps) {
         </CardContent>
       </Card>
 
-      <SongChat songId={song.id} onLyricsChange={handleLyricsChange} />
+      <SongChat
+        songId={song.id}
+        presetId={presetId}
+        onPresetChange={(id) => void handlePresetChange(id)}
+        onLyricsChange={handleLyricsChange}
+      />
 
       {exportOpen && <ExportDialog songId={song.id} onClose={() => setExportOpen(false)} />}
     </div>

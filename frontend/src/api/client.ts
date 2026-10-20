@@ -17,11 +17,12 @@ export class ApiError extends Error {
 }
 
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const isFormData = body instanceof FormData
   const response = await fetch(`${API_BASE}${path}`, {
     method,
     credentials: 'same-origin',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined || isFormData ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
   })
 
   if (!response.ok) {

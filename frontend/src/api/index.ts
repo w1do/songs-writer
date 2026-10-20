@@ -1,19 +1,14 @@
 import { request } from './client'
 import type {
-  ChorusResult,
-  FinishSongResult,
-  HookResult,
-  LineActionRequest,
-  LineActionResult,
-  LyricsDraftResult,
+  ChatMessage,
   Preset,
   PresetInput,
   Song,
+  SongChatResponse,
   SongCreateInput,
   SongExport,
   SongListItem,
   SongUpdateInput,
-  StructureResult,
 } from '@/types'
 
 export { ApiError, setUnauthorizedHandler } from './client'
@@ -42,16 +37,7 @@ export const songsApi = {
 }
 
 export const aiApi = {
-  analyzeIdea: (songId: string) => request<Song>('POST', `/songs/${songId}/analyze-idea`),
-  lineAction: (songId: string, body: LineActionRequest) =>
-    request<LineActionResult>('POST', `/songs/${songId}/line-action`, body),
-  continueSection: (songId: string, section: string) =>
-    request<LineActionResult>('POST', `/songs/${songId}/continue-section`, { section }),
-  createHook: (songId: string) => request<HookResult>('POST', `/songs/${songId}/create-hook`),
-  createChorus: (songId: string) => request<ChorusResult>('POST', `/songs/${songId}/create-chorus`),
-  draftLyrics: (songId: string) => request<LyricsDraftResult>('POST', `/songs/${songId}/draft-lyrics`),
-  structureSuggestion: (songId: string) =>
-    request<StructureResult>('POST', `/songs/${songId}/structure-suggestion`),
-  finishSong: (songId: string) => request<FinishSongResult>('POST', `/songs/${songId}/finish-song`),
-  prepareTrack: (songId: string) => request<Song>('POST', `/songs/${songId}/prepare-track`),
+  listMessages: (songId: string) => request<ChatMessage[]>('GET', `/songs/${songId}/messages`),
+  chat: (songId: string, message: string) =>
+    request<SongChatResponse>('POST', `/songs/${songId}/chat`, { message }),
 }

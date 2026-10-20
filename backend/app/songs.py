@@ -55,6 +55,8 @@ def update_song(song_id: uuid.UUID, body: SongUpdate, db: Session = Depends(get_
     changes = body.model_dump(exclude_unset=True)
     if "preset_id" in changes:
         _ensure_preset_exists(db, changes["preset_id"])
+    if "story" in changes and not (changes["story"] or "").strip():
+        changes["story"] = None
     for field, value in changes.items():
         setattr(song, field, value)
     db.commit()

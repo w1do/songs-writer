@@ -33,15 +33,6 @@ export interface PresetInput {
   description?: string | null
 }
 
-export interface AnalysisResult {
-  theme: string
-  emotion: string
-  genre: string
-  bpm: number
-  energy: number
-  structure: string[]
-}
-
 export interface TrackSettings {
   style_prompt?: string | null
   negative_style_prompt?: string | null
@@ -53,10 +44,11 @@ export type GenerationSettings = Record<string, unknown>
 export interface Song {
   id: UUID
   title: string | null
+  story: string | null
   idea: string | null
   lyrics: string | null
   track_settings: TrackSettings | null
-  analysis: AnalysisResult | Record<string, unknown> | null
+  analysis: Record<string, unknown> | null
   generation_settings: GenerationSettings | null
   preset_id: UUID | null
   created_at: string
@@ -81,6 +73,7 @@ export interface SongCreateInput {
 export interface SongUpdateInput {
   title?: string | null
   idea?: string | null
+  story?: string | null
   lyrics?: string | null
   track_settings?: TrackSettings | null
   analysis?: Record<string, unknown> | null
@@ -98,36 +91,15 @@ export interface SongExport {
   generation_settings: GenerationSettings | null
 }
 
-export type LineActionType = 'variants' | 'continue' | 'rewrite' | 'rhyme' | 'flow' | 'vocal'
-
-export interface LineActionRequest {
-  action: LineActionType
-  line: string
-  selection?: string | null
+export interface ChatMessage {
+  id: UUID
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
 }
 
-export interface LineActionResult {
-  variants: string[]
-  note: string | null
-}
-
-export interface HookResult {
-  variants: string[]
-}
-
-export interface ChorusResult {
-  variants: string[][]
-}
-
-export interface LyricsDraftResult {
-  variants: string[]
-}
-
-export interface StructureResult {
-  sections: string[]
-  reason: string | null
-}
-
-export interface FinishSongResult {
-  comments: string[]
+export interface SongChatResponse {
+  reply: string
+  lyrics: string | null
+  messages: ChatMessage[]
 }

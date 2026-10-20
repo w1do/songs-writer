@@ -4,13 +4,15 @@ from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import require_session
 from app.database import get_db
-from app.models import Song
+from app.models import Message, Song
 from app.schemas import (
     AnalyzeIdeaResult,
+    ChatAIResult,
     ChorusResult,
     ContinueSectionRequest,
     ContinueSectionResult,
@@ -19,12 +21,16 @@ from app.schemas import (
     LineActionRequest,
     LineActionResult,
     LyricsDraftResult,
+    MessageRead,
     PrepareTrackResult,
+    SongChatRequest,
+    SongChatResponse,
     SongRead,
     StructureResult,
 )
 from app.services.ai import (
     AIServiceError,
+    build_chat_context,
     build_song_context,
     log_message,
     parse_structured,
@@ -111,6 +117,23 @@ PREPARE_TRACK_SYSTEM_PROMPT = (
     "performance (строка или null), "
     "generation_settings (объект с настройками генерации, может быть пустым)."
 )
+
+CHAT_SYSTEM_PROMPT = (
+    "Ты помогаешь музыканту создать текст песни в режиме диалога. "
+    "Опирайся на историю песни (story), тему (idea), жанр, параметры пресета, "
+    "текущий текст (lyrics) и предыдущие сообщения. "
+    "Текст строится из секций с тегами на отдельной строке: "
+    "[INTRO], [VERSE], [PRE-CHORUS], [CHORUS], [BRIDGE], [OUTRO]. "
+    "Хуки и припевы выстраивай через [CHORUS]. "
+    "Меняй только секции, которых касается просьба, остальной текст сохраняй дословно. "
+    "Если просьба неясна, задай один уточняющий вопрос в reply и верни lyrics как null. "
+    "Ответь только JSON-объектом с полями: "
+    "reply (строка, краткий комментарий на языке пользователя), "
+    "lyrics (строка с полным обновлённым текстом или null, если текст не менялся)."
+)
+
+CHAT_HISTORY_LIMIT = 20
+CHAT_ATTEMPTS = 2
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -275,3 +298,74 @@ def prepare_track(song_id: uuid.UUID, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(song)
     return song
+
+
+def _request_chat_result(user_prompt: str) -> tuple[str, ChatAIResult]:
+    last_error: AIServiceError | None = None
+    for _ in range(CHAT_ATTEMPTS):
+        content = request_completion(CHAT_SYSTEM_PROMPT, user_prompt)
+        try:
+            return content, parse_structured(content, ChatAIResult)
+        except AIServiceError as exc:
+            last_error = exc
+    raise last_error
+
+
+@router.get("/{song_id}/messages", response_model=list[MessageRead])
+def list_chat_messages(song_id: uuid.UUID, db: Session = Depends(get_db)):
+    song = _get_song(db, song_id)
+    return db.scalars(
+        select(Message)
+        .where(Message.song_id == song.id, Message.role.in_(("user", "assistant")))
+        .order_by(Message.created_at)
+    ).all()
+
+
+@router.post("/{song_id}/chat", response_model=SongChatResponse)
+def chat(song_id: uuid.UUID, payload: SongChatRequest, db: Session = Depends(get_db)):
+    song = _get_song(db, song_id)
+    history = list(
+        reversed(
+            db.scalars(
+                select(Message)
+                .where(
+                    Message.song_id == song.id,
+                    Message.role.in_(("user", "assistant")),
+                )
+                .order_by(Message.created_at.desc())
+                .limit(CHAT_HISTORY_LIMIT)
+            ).all()
+        )
+    )
+    context = build_chat_context(song, song.preset, history)
+    user_message = log_message(db, song, "user", payload.message, {"action": "chat"})
+    user_prompt = json.dumps(
+        {"song": context, "message": payload.message}, ensure_ascii=False
+    )
+    try:
+        content, result = _request_chat_result(user_prompt)
+    except AIServiceError as exc:
+        log_message(db, song, "error", str(exc), {"action": "chat"})
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+    assistant_message = log_message(
+        db,
+        song,
+        "assistant",
+        result.reply,
+        {"action": "chat", "raw_response": content},
+        commit=False,
+    )
+    lyrics = (result.lyrics or "").strip()
+    if lyrics:
+        song.lyrics = lyrics
+    db.commit()
+    db.refresh(song)
+    db.refresh(user_message)
+    db.refresh(assistant_message)
+    return SongChatResponse(
+        reply=result.reply,
+        lyrics=song.lyrics,
+        messages=[user_message, assistant_message],
+    )

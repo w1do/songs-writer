@@ -16,6 +16,8 @@ async def lifespan(app: FastAPI):
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS story TEXT"))
     yield
 
 

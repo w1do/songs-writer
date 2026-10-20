@@ -20,6 +20,7 @@ def client(monkeypatch):
 
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS story TEXT"))
         connection.execute(text("TRUNCATE songs, messages, presets CASCADE"))
 
     app = FastAPI()
@@ -259,3 +260,44 @@ def test_delete_song_without_session_returns_401(client):
     response = client.delete(f"/songs/{song['id']}")
 
     assert response.status_code == 401
+
+
+def test_patch_story_saves_and_returns_it(client):
+    created = create_song(client)
+
+    response = client.patch(
+        f"/songs/{created['id']}", json={"story": "Про дождь в городе"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["story"] == "Про дождь в городе"
+    assert client.get(f"/songs/{created['id']}").json()["story"] == (
+        "Про дождь в городе"
+    )
+
+
+def test_patch_blank_story_clears_it_to_null(client):
+    created = create_song(client)
+    client.patch(f"/songs/{created['id']}", json={"story": "text"})
+
+    response = client.patch(f"/songs/{created['id']}", json={"story": "   "})
+
+    assert response.status_code == 200
+    assert response.json()["story"] is None
+
+
+def test_patch_story_longer_than_limit_returns_422(client):
+    created = create_song(client)
+
+    response = client.patch(
+        f"/songs/{created['id']}", json={"story": "a" * 10001}
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/songs/{created['id']}").json()["story"] is None
+
+
+def test_new_song_has_null_story(client):
+    created = create_song(client)
+
+    assert created["story"] is None

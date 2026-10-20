@@ -36,6 +36,45 @@ def _non_empty(values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+CHAT_PRESET_FIELDS = (
+    "name",
+    "genre",
+    "bpm_min",
+    "bpm_max",
+    "energy",
+    "style_prompt",
+    "negative_style_prompt",
+    "hooks_prompt",
+    "effects_prompt",
+    "chorus_vocal_style",
+)
+
+
+def build_chat_context(
+    song: Song, preset: Preset | None, history: list[Message]
+) -> dict[str, Any]:
+    analysis = song.analysis or {}
+    context = _non_empty(
+        {
+            "story": song.story,
+            "idea": song.idea,
+            "genre": analysis.get("genre"),
+            "lyrics": song.lyrics,
+        }
+    )
+    if preset is not None:
+        preset_context = _non_empty(
+            {field: getattr(preset, field) for field in CHAT_PRESET_FIELDS}
+        )
+        if preset_context:
+            context["preset"] = preset_context
+    if history:
+        context["messages"] = [
+            {"role": message.role, "content": message.content} for message in history
+        ]
+    return context
+
+
 def build_song_context(song: Song, preset: Preset | None = None) -> dict[str, Any]:
     analysis = song.analysis or {}
     track_settings = song.track_settings or {}
@@ -125,13 +164,15 @@ def log_message(
     role: str,
     content: str,
     metadata: dict[str, Any] | None = None,
-) -> None:
-    db.add(
-        Message(
-            song_id=song.id,
-            role=role,
-            content=content,
-            message_metadata=metadata,
-        )
+    commit: bool = True,
+) -> Message:
+    message = Message(
+        song_id=song.id,
+        role=role,
+        content=content,
+        message_metadata=metadata,
     )
-    db.commit()
+    db.add(message)
+    if commit:
+        db.commit()
+    return message

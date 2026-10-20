@@ -19,6 +19,7 @@ class SongCreate(BaseModel):
 class SongUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     idea: str | None = Field(default=None, min_length=1)
+    story: str | None = Field(default=None, max_length=10000)
     lyrics: str | None = None
     track_settings: dict[str, Any] | None = None
     analysis: dict[str, Any] | None = None
@@ -32,6 +33,7 @@ class SongRead(BaseModel):
     id: uuid.UUID
     title: str | None
     idea: str | None
+    story: str | None
     lyrics: str | None
     track_settings: dict[str, Any] | None
     analysis: dict[str, Any] | None
@@ -39,6 +41,42 @@ class SongRead(BaseModel):
     preset_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+
+
+class MessageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    role: str
+    content: str
+    created_at: datetime
+
+
+class SongChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("message")
+    @classmethod
+    def strip_message(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("message must not be blank")
+        return value
+
+
+class ChatAIResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    reply: str = Field(min_length=1)
+    lyrics: str | None = None
+
+
+class SongChatResponse(BaseModel):
+    reply: str
+    lyrics: str | None
+    messages: list[MessageRead]
 
 
 class SongListItem(BaseModel):

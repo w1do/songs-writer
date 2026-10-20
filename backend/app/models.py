@@ -42,6 +42,7 @@ class Song(Base):
     )
     title: Mapped[str | None] = mapped_column(String(300), nullable=True)
     idea: Mapped[str | None] = mapped_column(Text, nullable=True)
+    story: Mapped[str | None] = mapped_column(Text, nullable=True)
     lyrics: Mapped[str | None] = mapped_column(Text, nullable=True)
     track_settings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

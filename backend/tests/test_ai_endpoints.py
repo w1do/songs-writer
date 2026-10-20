@@ -32,6 +32,7 @@ def client(monkeypatch):
 
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS story TEXT"))
         connection.execute(text("TRUNCATE songs, messages, presets CASCADE"))
 
     app = FastAPI()
@@ -463,3 +464,135 @@ def test_draft_lyrics_error_log_keeps_raw_response(client, monkeypatch):
     assert any(
         (m.message_metadata or {}).get("raw_response") == "не JSON вообще" for m in errors
     )
+
+
+def test_chat_saves_messages_and_updates_lyrics(client, monkeypatch):
+    song = create_song(client)
+    reply = {"reply": "Усилил припев", "lyrics": "[CHORUS]\nновый припев"}
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(reply)))
+
+    response = client.post(
+        f"/songs/{song['id']}/chat", json={"message": "  усиль припев  "}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply"] == "Усилил припев"
+    assert body["lyrics"] == "[CHORUS]\nновый припев"
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+    assert body["messages"][0]["content"] == "усиль припев"
+    assert client.get(f"/songs/{song['id']}").json()["lyrics"] == (
+        "[CHORUS]\nновый припев"
+    )
+
+
+def test_chat_without_lyrics_change_keeps_lyrics(client, monkeypatch):
+    song = create_song(client)
+    client.patch(f"/songs/{song['id']}", json={"lyrics": "[VERSE]\nkeep"})
+    reply = {"reply": "Какой бридж нужен?", "lyrics": None}
+    monkeypatch.setattr(ai, "request_completion", fake_completion(json.dumps(reply)))
+
+    response = client.post(f"/songs/{song['id']}/chat", json={"message": "хочу"})
+
+    assert response.status_code == 200
+    assert response.json()["lyrics"] == "[VERSE]\nkeep"
+    assert client.get(f"/songs/{song['id']}").json()["lyrics"] == "[VERSE]\nkeep"
+
+
+def test_chat_prompt_contains_story_preset_and_history(client, monkeypatch):
+    from app.database import SessionLocal
+    from app.models import Preset
+
+    with SessionLocal() as db:
+        preset = Preset(name="Trap", genre="trap", bpm_min=140)
+        db.add(preset)
+        db.commit()
+        preset_id = str(preset.id)
+    song = client.post(
+        "/songs", json={"idea": "rainy city at night", "preset_id": preset_id}
+    ).json()
+    client.patch(
+        f"/songs/{song['id']}",
+        json={"story": "история про ночной город", "lyrics": "[VERSE]\nold"},
+    )
+    captured = {}
+
+    def capturing(system_prompt, user_prompt, transport=None):
+        captured["user"] = user_prompt
+        return json.dumps({"reply": "ок", "lyrics": None})
+
+    monkeypatch.setattr(ai, "request_completion", capturing)
+
+    client.post(f"/songs/{song['id']}/chat", json={"message": "первый"})
+    client.post(f"/songs/{song['id']}/chat", json={"message": "второй"})
+
+    prompt = json.loads(captured["user"])
+    assert prompt["song"]["story"] == "история про ночной город"
+    assert prompt["song"]["lyrics"] == "[VERSE]\nold"
+    assert prompt["song"]["preset"]["genre"] == "trap"
+    assert prompt["song"]["messages"][-1] == {"role": "assistant", "content": "ок"}
+    assert prompt["song"]["messages"][0] == {"role": "user", "content": "первый"}
+    assert prompt["message"] == "второй"
+
+
+def test_chat_missing_song_returns_404(client):
+    response = client.post(f"/songs/{uuid.uuid4()}/chat", json={"message": "hi"})
+
+    assert response.status_code == 404
+
+
+def test_chat_blank_message_returns_422(client):
+    song = create_song(client)
+
+    response = client.post(f"/songs/{song['id']}/chat", json={"message": "   "})
+
+    assert response.status_code == 422
+    assert client.get(f"/songs/{song['id']}").json() is not None
+
+
+def test_chat_provider_error_saves_user_message_only(client, monkeypatch):
+    song = create_song(client)
+
+    def failing(system_prompt, user_prompt, transport=None):
+        raise AIServiceError("AI provider timed out")
+
+    monkeypatch.setattr(ai, "request_completion", failing)
+
+    response = client.post(f"/songs/{song['id']}/chat", json={"message": "hi"})
+
+    assert response.status_code == 502
+    assert client.get(f"/songs/{song['id']}").json()["lyrics"] is None
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        roles = [
+            m.role
+            for m in db.query(Message)
+            .filter(Message.song_id == uuid.UUID(song["id"]))
+            .order_by(Message.created_at)
+            .all()
+        ]
+    assert roles == ["user", "error"]
+
+
+def test_chat_retries_once_on_invalid_json(client, monkeypatch):
+    song = create_song(client)
+    valid = json.dumps({"reply": "готово", "lyrics": "[CHORUS]\nx"})
+    responses = iter(["not json", valid])
+    monkeypatch.setattr(ai, "request_completion", lambda s, u, transport=None: next(responses))
+
+    response = client.post(f"/songs/{song['id']}/chat", json={"message": "hi"})
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "готово"
+
+
+def test_chat_invalid_json_twice_returns_502_and_keeps_lyrics(client, monkeypatch):
+    song = create_song(client)
+    client.patch(f"/songs/{song['id']}", json={"lyrics": "[VERSE]\nkeep"})
+    monkeypatch.setattr(ai, "request_completion", fake_completion("not json"))
+
+    response = client.post(f"/songs/{song['id']}/chat", json={"message": "hi"})
+
+    assert response.status_code == 502
+    assert client.get(f"/songs/{song['id']}").json()["lyrics"] == "[VERSE]\nkeep"
